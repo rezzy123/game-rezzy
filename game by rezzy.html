@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <title>Geometry Dash Multiplayer by Rezzy</title>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0c3e; }
+    canvas { display: block; }
+    #startBtn {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: #fff; padding: 10px 20px;
+      border-radius: 8px; border: none;
+      font-size: 18px; cursor: pointer; z-index: 1;
+    }
+    #title {
+      position: absolute; top: 10px; left: 20px;
+      color: white; font-family: sans-serif;
+      font-size: 20px; z-index: 2;
+    }
+  </style>
+</head>
+<body>
+  <div id="title">🎮 Geometry Dash by Rezzy</div>
+  <button id="startBtn">🎮 Mulai Game</button>
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- Socket.io CDN -->
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+
+  <!-- Suara -->
+  <audio id="jumpSound" src="https://www.soundjay.com/button/sounds/button-3.mp3"></audio>
+  <audio id="gameOverSound" src="https://www.soundjay.com/button/sounds/button-10.mp3"></audio>
+
+  <script>
+    const socket = io("http://localhost:3000");
+
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const jumpSound = document.getElementById("jumpSound");
+    const gameOverSound = document.getElementById("gameOverSound");
+
+    const skinColors = ["orange", "cyan", "lime", "yellow", "magenta"];
+    const faceNormal = "😄", faceJump = "😮", faceDead = "😵", faceAngry = "😡";
+
+    let player = {
+      x: 100,
+      y: canvas.height - 150,
+      size: 40,
+      color: skinColors[Math.floor(Math.random() * skinColors.length)],
+      dy: 0,
+      gravity: 1.5,
+      jumpForce: -20,
+      grounded: false,
+      face: faceNormal
+    };
+
+    let blocks = [];
+    let score = 0;
+    let gameSpeed = 6;
+    let isGameRunning = false;
+    let otherPlayers = {};
+    let particles = [];
+    let spawnTimer;
+
+    socket.on("currentPlayers", (players) => {
+      for (let id in players) {
+        if (id !== socket.id) {
+          otherPlayers[id] = players[id];
+        }
+      }
+    });
+
+    socket.on("newPlayer", (data) => {
+      otherPlayers[data.id] = data;
+    });
+
+    socket.on("playerMoved", (data) => {
+      if (otherPlayers[data.id]) {
+        otherPlayers[data.id].x = data.x;
+        otherPlayers[data.id].y = data.y;
+      }
+    });
+
+    socket.on("playerDisconnected", (id) => {
+      delete otherPlayers[id];
+    });
+
+    function drawPlayer() {
+      ctx.fillStyle = player.color;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.size / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = "20px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "black";
+      ctx.fillText(player.face, player.x, player.y + 5);
+    }
+
+    function drawOtherPlayers() {
+      ctx.fillStyle = "lightblue";
+      for (let id in otherPlayers) {
+        const p = otherPlayers[id];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawGround() {
+      ctx.fillStyle = "#333";
+      ctx.fillRect(0, canvas.height - 100, canvas.width, 100);
+    }
+
+    function drawBlocks() {
+      ctx.fillStyle = "red";
+      blocks.forEach(block => {
+        ctx.beginPath();
+        ctx.moveTo(block.x, block.y + block.height);
+        ctx.lineTo(block.x + block.width / 2, block.y);
+        ctx.lineTo(block.x + block.width, block.y + block.height);
+        ctx.closePath();
+        ctx.fill();
+      });
+    }
+
+    function spawnBlock() {
+      const block = {
+        x: canvas.width,
+        y: canvas.height - 130,
+        width: 40,
+        height: 40,
+      };
+      blocks.push(block);
+    }
+
+    function updateBlocks() {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        blocks[i].x -= gameSpeed;
+        if (blocks[i].x + blocks[i].width < 0) {
+          blocks.splice(i, 1);
+          score++;
+          updateSpawnRate();
+        }
+      }
+    }
+
+    function handlePlayerPhysics() {
+      player.dy += player.gravity;
+      player.y += player.dy;
+
+      if (player.y + player.size / 2 >= canvas.height - 100) {
+        player.y = canvas.height - 100 - player.size / 2;
+        player.dy = 0;
+        player.grounded = true;
+
+        if (score >= 10) {
+          player.face = faceAngry;
+        } else {
+          player.face = faceNormal;
+        }
+      } else {
+        player.grounded = false;
+      }
+
+      blocks.forEach(block => {
+        const px = player.x;
+        const py = player.y + player.size / 2;
+        if (
+          px > block.x &&
+          px < block.x + block.width &&
+          py > block.y &&
+          py < block.y + block.height
+        ) {
+          gameOver();
+        }
+      });
+    }
+
+    function drawScore() {
+      ctx.fillStyle = "white";
+      ctx.font = "20px sans-serif";
+      ctx.fillText("Score: " + score, 20, 70);
+    }
+
+    function gameOver() {
+      isGameRunning = false;
+      player.face = faceDead;
+      gameOverSound.play();
+      setTimeout(() => {
+        alert("😵 Game Over\nScore: " + score);
+        location.reload();
+      }, 300);
+    }
+
+    function drawParticles() {
+      particles.forEach((p, i) => {
+        p.x += p.dx;
+        p.y += p.dy;
+        p.life -= 1;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 4, 4);
+        if (p.life <= 0) particles.splice(i, 1);
+      });
+    }
+
+    function spawnParticles(x, y, color) {
+      for (let i = 0; i < 15; i++) {
+        particles.push({
+          x: x,
+          y: y,
+          dx: (Math.random() - 0.5) * 4,
+          dy: (Math.random() - 1.5) * 4,
+          life: 20 + Math.random() * 10,
+          color: color
+        });
+      }
+    }
+
+    function gameLoop() {
+      if (!isGameRunning) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      gameSpeed = score >= 10 ? 8 : 6;
+
+      drawGround();
+      drawPlayer();
+      drawOtherPlayers();
+      drawBlocks();
+      drawParticles();
+      drawScore();
+      updateBlocks();
+      handlePlayerPhysics();
+
+      socket.emit("playerMovement", {
+        x: player.x,
+        y: player.y,
+      });
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    function updateSpawnRate() {
+      clearInterval(spawnTimer);
+      const interval = score >= 10 ? 1000 : 1800;
+      spawnTimer = setInterval(() => {
+        if (isGameRunning) spawnBlock();
+      }, interval);
+    }
+
+    function startGame() {
+      isGameRunning = true;
+      score = 0;
+      player.y = canvas.height - 150;
+      player.dy = 0;
+      player.face = faceNormal;
+      player.color = skinColors[Math.floor(Math.random() * skinColors.length)];
+      blocks = [];
+      particles = [];
+      updateSpawnRate();
+      gameLoop();
+    }
+
+    document.getElementById("startBtn").addEventListener("click", () => {
+      document.getElementById("startBtn").style.display = "none";
+      startGame();
+    });
+
+    window.addEventListener("touchstart", jump);
+    window.addEventListener("keydown", e => {
+      if (e.code === "Space") jump();
+    });
+
+    function jump() {
+      if (player.grounded && isGameRunning) {
+        player.dy = player.jumpForce;
+        player.grounded = false;
+        player.face = faceJump;
+        jumpSound.play();
+        spawnParticles(player.x, player.y + player.size / 2, player.color);
+      }
+    }
+  </script>
+</body>
+</html>
